@@ -1,0 +1,29 @@
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Update the apt package index
+      become: yes
+      apt:
+        update_cache: yes
+    - name: Install docker
+      become: yes
+      apt:
+        pkg:
+          - docker.io
+    - name: Add user to docker group
+      become: yes
+      user:
+        name: ubuntu
+        group: docker
+    - name: Reset ssh connection
+      meta:
+        reset_connection
+    - name: Install docker-compose
+      become: yes
+      get_url:
+        url: https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: "0755"
+    - name: Check Docker compose availability
+      command: docker-compose --version

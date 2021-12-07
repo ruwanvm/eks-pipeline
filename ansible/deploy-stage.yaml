@@ -1,0 +1,25 @@
+---
+- hosts: all
+  gather_facts: false
+  vars:
+    stormglass_key: stormglass_key
+  tasks:
+    - name: Create directory to application code
+      file:
+        path: max-weather
+        state: directory
+    - name: Copy microservices
+      copy:
+        src: ../{{ item }}
+        dest: max-weather/
+        mode: "0744"
+      with_items:
+        ["current-weather","daily-weather","hourly-weather", "docker-compose.yml"]
+    - name: Deploy staging environment
+      command: docker-compose up -d --build
+      args:
+        chdir: max-weather/
+      environment:
+        stormglass_key: "{{ stormglass_key }}"
+
+

@@ -1,0 +1,35 @@
+version: '3'
+services:
+  current-weather:
+    image: max-weather_current
+    build:
+      context: ./current-weather
+      dockerfile: Dockerfile
+    container_name: max-weather_current
+    ports:
+      - "5001:5000"
+    environment:
+      - stormglass_key=${stormglass_key}
+    restart: always
+  hourly-weather:
+    image: max-weather_hourly
+    build:
+      context: hourly-weather
+      dockerfile: Dockerfile
+    container_name: max-weather_hourly
+    ports:
+      - "5002:5000"
+    environment:
+      - stormglass_key=${stormglass_key}
+    restart: always
+  daily-weather:
+    image: max-weather_daily
+    build:
+      context: daily-weather
+      dockerfile: Dockerfile
+    container_name: max-weather_daily
+    ports:
+      - "5003:5000"
+    environment:
+      - stormglass_key=${stormglass_key}
+    restart: always

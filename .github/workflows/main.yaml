@@ -1,0 +1,248 @@
+name: CI/CD pipeline
+on:
+  push:
+    branches:
+      - main
+jobs:
+  provision:
+    name: Provision Resources
+    runs-on: ubuntu-20.04
+    timeout-minutes: 30
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Provision infrastructure with Terraform
+        id: provision-resources
+        run: |
+          cd ./terraform;
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" \
+            -backend-config="region=${{ secrets.TF_BACKEND_REGION }}" \
+            -backend-config="key=terraform/${{ secrets.ENV_NAME }}.tfstate" \
+            --reconfigure;
+          terraform apply \
+            -var "environment=${{ secrets.ENV_NAME }}" \
+            -var "region=${{ secrets.AWS_REGION }}" \
+            --auto-approve;
+          KUBECTL_SSH_USER=`terraform output kubectl-ssh-user | tr -d '"'`;
+          KUBECTL_IP=`terraform output kubectl-server-ip | tr -d '"'`;
+          STAGE_SSH_USER=`terraform output staging-ssh-user | tr -d '"'`;
+          STAGE_IP=`terraform output staging-server-ip | tr -d '"'`;
+          echo "::set-output name=kubectl_ssh_user::${KUBECTL_SSH_USER}";
+          echo "::set-output name=kubectl_ip::${KUBECTL_IP}";
+          echo "::set-output name=staging_ssh_user::${STAGE_SSH_USER}";
+          echo "::set-output name=staging_ip::${STAGE_IP}";
+      - name: Upload keyfiles to S3 for re-use
+        run: |
+          aws s3 sync ./tmp/ s3://${{ secrets.TF_BACKEND_BUCKET }}/artifacts/${{ secrets.ENV_NAME }}/
+    outputs:
+      kubectl_ssh_user: ${{ steps.provision-resources.outputs.kubectl_ssh_user }}
+      kubectl_ip: ${{ steps.provision-resources.outputs.kubectl_ip }}
+      staging_ssh_user: ${{ steps.provision-resources.outputs.staging_ssh_user }}
+      staging_ip: ${{ steps.provision-resources.outputs.staging_ip }}
+  stage-deployment:
+    name: Deploy microservices to Stage
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Download key files
+        run: |
+          mkdir ./tmp
+          aws s3 sync s3://${{ secrets.TF_BACKEND_BUCKET }}/artifacts/${{ secrets.ENV_NAME }}/ ./tmp/
+      - name: setup staging server and deploy microservices
+        env:
+          PRIVATE_KEY: tmp/${{ secrets.ENV_NAME }}-key.pem
+          STAGE_SSH_USER: ${{ needs.provision.outputs.staging_ssh_user }}
+          STAGE_IP: ${{ needs.provision.outputs.staging_ip }}
+          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
+        run: |
+          chmod 600 $PRIVATE_KEY;
+          ansible-playbook \
+            -u $STAGE_SSH_USER \
+            -i $STAGE_IP, \
+            --private-key $PRIVATE_KEY \
+            ansible/setup-staging.yaml;
+          ansible-playbook \
+            -u $STAGE_SSH_USER \
+            -i $STAGE_IP, \
+            --private-key $PRIVATE_KEY \
+            -e stormglass_key=$STORMGLASS_KEY \
+            ansible/deploy-stage.yaml;
+  end-to-end-test:
+    name: End to End test on Stage
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+      - stage-deployment
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Run E2E testcases
+        env:
+          STAGE_IP: ${{ needs.provision.outputs.staging_ip }}
+        run: python test/e2e-test.py $STAGE_IP
+      - name: Send Slack message on failure
+        if: ${{ failure() }}
+        uses: ruwanvm/notify-action@slack
+        with:
+          webhook: ${{ secrets.NOTIFICATION_SLACK_CHANNEL }}
+          message: "*${ENVIRONMENT}* E2E Stage testing failed. Please check the GitHub logs"
+          status: Fail
+  build-current-microservice:
+    name: Build & Push current-weather microservice
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+      - stage-deployment
+      - end-to-end-test
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build docker image and Push to ECR
+        run: |
+          cd current-weather;
+          docker build . -t ${{ steps.ecr-login.outputs.registry }}/current:1.$GITHUB_RUN_NUMBER;
+          docker push ${{ steps.ecr-login.outputs.registry }}/current:1.$GITHUB_RUN_NUMBER;
+  build-hourly-microservice:
+    name: Build & Push hourly-weather microservice
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+      - stage-deployment
+      - end-to-end-test
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build docker image and Push to ECR
+        run: |
+          cd hourly-weather;
+          docker build . -t ${{ steps.ecr-login.outputs.registry }}/hourly:1.$GITHUB_RUN_NUMBER;
+          docker push ${{ steps.ecr-login.outputs.registry }}/hourly:1.$GITHUB_RUN_NUMBER;
+  build-daily-microservice:
+    name: Build & Push daily-weather microservice
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+      - stage-deployment
+      - end-to-end-test
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build docker image and Push to ECR
+        run: |
+          cd daily-weather;
+          docker build . -t ${{ steps.ecr-login.outputs.registry }}/daily:1.$GITHUB_RUN_NUMBER;
+          docker push ${{ steps.ecr-login.outputs.registry }}/daily:1.$GITHUB_RUN_NUMBER;
+  deploy-production:
+    name: Deploy application to production
+    runs-on: ubuntu-20.04
+    needs:
+      - provision
+      - stage-deployment
+      - end-to-end-test
+      - build-current-microservice
+      - build-hourly-microservice
+      - build-daily-microservice
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Download key files
+        run: |
+          mkdir ./tmp
+          aws s3 sync s3://${{ secrets.TF_BACKEND_BUCKET }}/artifacts/${{ secrets.ENV_NAME }}/ ./tmp/
+      - name: setup kubectl server
+        env:
+          PRIVATE_KEY: tmp/${{ secrets.ENV_NAME }}-key.pem
+          KUBECTL_SSH_USER: ${{ needs.provision.outputs.kubectl_ssh_user }}
+          KUBECTL_IP: ${{ needs.provision.outputs.kubectl_ip }}
+        run: |
+          chmod 600 $PRIVATE_KEY;
+          ansible-playbook \
+            -u $KUBECTL_SSH_USER \
+            -i $KUBECTL_IP, \
+            --private-key $PRIVATE_KEY \
+            ansible/setup-kubectl.yaml;
+      - name: Deploy microservices to Production
+        env:
+          PRIVATE_KEY: tmp/${{ secrets.ENV_NAME }}-key.pem
+          KUBECTL_SSH_USER: ${{ needs.provision.outputs.kubectl_ssh_user }}
+          KUBECTL_IP: ${{ needs.provision.outputs.kubectl_ip }}
+          STORMGLASS_KEY: ${{ secrets.STORMGLASS_KEY }}
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo $ECR_REGISTRY;
+          echo "1.${VERSION}";
+          ansible-playbook \
+            -u $KUBECTL_SSH_USER \
+            -i $KUBECTL_IP, \
+            -e ECR_REGISTRY=$ECR_REGISTRY \
+            -e VERSION=$GITHUB_RUN_NUMBER \
+            -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+            --private-key $PRIVATE_KEY \
+            ansible/deploy-production.yaml;
+      - name: Send Slack message on failure
+        if: ${{ failure() }}
+        uses: ruwanvm/notify-action@slack
+        with:
+          webhook: ${{ secrets.NOTIFICATION_SLACK_CHANNEL }}
+          message: "*${{ secrets.ENV_NAME }}* Production deployment failed. Check the GitHub action logs"
+          status: Fail
+      - name: Send Slack message on Succesful deployment
+        uses: ruwanvm/notify-action@slack
+        with:
+          webhook: ${{ secrets.NOTIFICATION_SLACK_CHANNEL }}
+          message: "New version is deployed to *${{ secrets.ENV_NAME }}* Production environment"

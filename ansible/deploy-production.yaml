@@ -1,0 +1,52 @@
+---
+- hosts: all
+  gather_facts: false
+  vars:
+    ECR_REGISTRY: ECR_REGISTRY
+    VERSION: VERSION
+    AWS_ACCESS_KEY_ID: AWS_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY: AWS_SECRET_ACCESS_KEY
+  tasks:
+    - name: check values
+      debug:
+        msg: ECR Registry - {{ ECR_REGISTRY }} Version - {{ VERSION }}
+    - name: Create directory to kubeconfig files
+      file:
+        path: ~/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+    - name: Configure kubectl to access EKS cluster
+      copy:
+        src: ../tmp/kubeconfig
+        dest: ~/.kube/config
+        mode: "0644"
+    - name: Check Kubectl connectivity
+      command: kubectl version --short
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ AWS_ACCESS_KEY_ID }}"
+        AWS_SECRET_ACCESS_KEY: "{{ AWS_SECRET_ACCESS_KEY }}"
+    - name: Create directory to kube-manifests
+      file:
+        path: kube-manifests
+        state: directory
+    - name: Copy kube-manifests to server
+      copy:
+        src: ../kubernetes/
+        dest: kube-manifests/
+        mode: '0766'
+    - name: replace the deployment yaml file - registry
+      replace:
+        path: ./kube-manifests/max-weather-deployments.yaml
+        regexp: "_ECR_REGISTRY_"
+        replace: "{{ ECR_REGISTRY }}"
+    - name: replace the deployment yaml file - version
+      replace:
+        path: ./kube-manifests/max-weather-deployments.yaml
+        regexp: "_VERSION_"
+        replace: "{{ VERSION }}"
+    - name: apply kube-manifests on production environemnt
+      command: kubectl apply -f kube-manifests/
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ AWS_ACCESS_KEY_ID }}"
+        AWS_SECRET_ACCESS_KEY: "{{ AWS_SECRET_ACCESS_KEY }}"

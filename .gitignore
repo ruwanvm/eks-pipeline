@@ -1,0 +1,26 @@
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+**/*.tfstate
+**/*.tfstate.*
+
+# Terraform local directories
+**/*.lock.hcl
+
+# tfvars files
+**/*.tfvars
+
+# IDE files
+.idea/*
+
+# temporary backup files
+backup/**
+tmp/**
+kubernetes/ingress-controller.yaml
+
+# local app start script
+local.bat
+
+# key files
+**/*.pem

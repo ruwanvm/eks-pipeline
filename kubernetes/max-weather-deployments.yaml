@@ -1,0 +1,123 @@
+---
+# Current weather API backend deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: current-weather-deployment
+  labels:
+    app: current_weather
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: current_weather
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: current_weather
+    spec:
+      containers:
+        - name: current-weather
+          image: _ECR_REGISTRY_/current:1._VERSION_
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: "256Mi"
+          env:
+            - name: stormglass_key
+              valueFrom:
+                secretKeyRef:
+                  name: weather-api
+                  key: stormglass_key
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+---
+# Hourly weather API backend deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hourly-weather-deployment
+  labels:
+    app: hourly_weather
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: hourly_weather
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: hourly_weather
+    spec:
+      containers:
+        - name: hourly-weather
+          image: _ECR_REGISTRY_/hourly:1._VERSION_
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: "256Mi"
+          env:
+            - name: stormglass_key
+              valueFrom:
+                secretKeyRef:
+                  name: weather-api
+                  key: stormglass_key
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+---
+# Daily weather API backend deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daily-weather-deployment
+  labels:
+    app: daily_weather
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: daily_weather
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: daily_weather
+    spec:
+      containers:
+        - name: daily-weather
+          image: _ECR_REGISTRY_/daily:1._VERSION_
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: "256Mi"
+          env:
+            - name: stormglass_key
+              valueFrom:
+                secretKeyRef:
+                  name: weather-api
+                  key: stormglass_key
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              protocol: TCP

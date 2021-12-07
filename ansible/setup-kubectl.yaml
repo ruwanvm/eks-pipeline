@@ -1,0 +1,40 @@
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Update the apt package index
+      become: yes
+      apt:
+        update_cache: yes
+    - name: Install packages needed to use the Kubernetes apt repository
+      become: yes
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+        state: present
+    - name: Download the Google Cloud public signing key
+      become: yes
+      get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/kubernetes-archive-keyring.gpg
+    - name: Add the Kubernetes apt repository
+      become: yes
+      command: echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+    - name: Update apt package index with the new repository
+      become: yes
+      apt:
+        update_cache: yes
+    - name: Install kubectl
+      become: yes
+      snap:
+        name: kubectl
+        classic: yes
+    - name: Install awscli
+      become: yes
+      apt:
+        name: awscli
+        state: present
+    - name: Check Kubectl installation
+      command: kubectl version --short --client
+
